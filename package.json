@@ -49,6 +49,7 @@
     "@supabase/supabase-js": "^2.107.0",
     "@xyflow/react": "^12.11.3",
     "class-variance-authority": "^0.7.1",
+    "cloudinary": "^2.11.0",
     "clsx": "^2.1.1",
     "code-inspector-plugin": "^2.0.9",
     "date-fns": "^4.4.0",
