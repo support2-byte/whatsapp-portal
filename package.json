@@ -50,6 +50,7 @@
     "@xyflow/react": "^12.11.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "code-inspector-plugin": "^2.0.9",
     "date-fns": "^4.4.0",
     "lucide-react": "^1.30.0",
     "next": "16.3.5",
