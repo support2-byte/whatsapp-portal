@@ -1,18 +1,11 @@
-/**
- * CSV parsing for the contacts import modal. Shared + unit-tested so
- * tag-column handling stays aligned with phone/name/email/company.
- */
-
 export interface ParsedContactRow {
   phone: string;
   name?: string;
   email?: string;
   company?: string;
-  /** Tag names from the optional `tags` column (comma/semicolon separated). */
   tagNames: string[];
 }
 
-/** Split a CSV cell into unique tag names (case-insensitive de-dupe). */
 export function parseTagCell(value: string | undefined): string[] {
   if (!value?.trim()) return [];
 
@@ -33,82 +26,171 @@ export function parseTagCell(value: string | undefined): string[] {
 
 export interface ParseContactCsvResult {
   rows: ParsedContactRow[];
-  /**
-   * True when the CSV header includes the required `phone` column.
-   * `rows` is empty both when the column is missing and when the file
-   * simply has no usable data rows; callers that need to tell those
-   * apart (to pick the right error message) read this flag.
-   */
   hasPhoneColumn: boolean;
-  /** True when the CSV header includes a `tags` column. */
   hasTagsColumn: boolean;
-  /** True when the CSV header includes a `company` column. */
   hasCompanyColumn: boolean;
 }
 
-export function parseContactCsv(text: string): ParseContactCsvResult {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) {
-    return {
-      rows: [],
-      hasPhoneColumn: false,
-      hasTagsColumn: false,
-      hasCompanyColumn: false,
-    };
+const HEADER_ALIASES = {
+  phone: [
+    'phone', 'phonenumber', 'phoneno', 'phonenum', 'mobile', 'mobilenumber',
+    'mobileno', 'mobilephone', 'cell', 'cellphone', 'cellnumber', 'whatsapp',
+    'whatsappnumber', 'whatsappno', 'wa', 'tel', 'telephone', 'telephonenumber',
+    'contactnumber', 'contactno', 'contactphone', 'number', 'msisdn', 'gsm',
+    'primaryphone', 'customerphone', 'clientphone',
+  ],
+  name: [
+    'name', 'fullname', 'contactname', 'customername', 'clientname',
+    'displayname', 'username', 'person',
+  ],
+  firstName: ['firstname', 'first', 'givenname', 'fname', 'forename'],
+  lastName: ['lastname', 'last', 'surname', 'familyname', 'lname'],
+  email: ['email', 'emailaddress', 'emailid', 'mail', 'mailaddress', 'eaddress'],
+  company: [
+    'company', 'companyname', 'organization', 'organisation', 'org',
+    'business', 'businessname', 'employer', 'account', 'firm',
+  ],
+  tags: ['tags', 'tag', 'labels', 'label', 'groups', 'group', 'segments', 'categories'],
+} as const;
+
+type Field = keyof typeof HEADER_ALIASES;
+
+function normalizeHeader(h: string): string {
+  return h.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function findColumn(headers: string[], field: Field): number {
+  for (const alias of HEADER_ALIASES[field]) {
+    const idx = headers.indexOf(alias);
+    if (idx !== -1) return idx;
   }
+  return -1;
+}
 
-  const headers = lines[0]
-    .split(',')
-    .map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+function looksLikePhone(value: string): boolean {
+  const v = value.trim();
+  if (!/^\+?[\d\s().-]+$/.test(v)) return false;
+  const digits = v.replace(/\D/g, '');
+  return digits.length >= 8 && digits.length <= 15;
+}
 
-  const phoneIdx = headers.indexOf('phone');
+function cleanPhone(raw: string): string {
+  const v = raw.trim();
+  if (/^00\d/.test(v.replace(/[\s().-]/g, ''))) {
+    return '+' + v.replace(/[\s().-]/g, '').slice(2);
+  }
+  return v;
+}
+
+function detectDelimiter(text: string): string {
+  let inQuotes = false;
+  const counts: Record<string, number> = { ',': 0, ';': 0, '\t': 0, '|': 0 };
+  for (const ch of text) {
+    if (ch === '"') inQuotes = !inQuotes;
+    else if (!inQuotes && (ch === '\n' || ch === '\r')) break;
+    else if (!inQuotes && ch in counts) counts[ch]++;
+  }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return best[1] > 0 ? best[0] : ',';
+}
+
+function tokenizeCsv(text: string, delimiter: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      row.push(cell.trim());
+      cell = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell.trim());
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell.trim());
+  rows.push(row);
+
+  return rows.filter((r) => r.some((c) => c !== ''));
+}
+
+const EMPTY_RESULT: ParseContactCsvResult = {
+  rows: [],
+  hasPhoneColumn: false,
+  hasTagsColumn: false,
+  hasCompanyColumn: false,
+};
+
+export function parseContactCsv(input: string): ParseContactCsvResult {
+  const text = input.replace(/^\uFEFF/, '').trim();
+  if (!text) return { ...EMPTY_RESULT };
+
+  const table = tokenizeCsv(text, detectDelimiter(text));
+  if (table.length < 2) return { ...EMPTY_RESULT };
+
+  const headers = table[0].map(normalizeHeader);
+  const dataRows = table.slice(1);
+
+  let phoneIdx = findColumn(headers, 'phone');
+
   if (phoneIdx === -1) {
-    return {
-      rows: [],
-      hasPhoneColumn: false,
-      hasTagsColumn: false,
-      hasCompanyColumn: false,
-    };
-  }
-
-  const nameIdx = headers.indexOf('name');
-  const emailIdx = headers.indexOf('email');
-  const companyIdx = headers.indexOf('company');
-  const tagsIdx = headers.indexOf('tags');
-
-  const rows: ParsedContactRow[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const values = parseCsvLine(line);
-    // A row with no usable phone is pushed through rather than dropped
-    // here — dedupeByPhone (shared with the webhook/manual-form paths)
-    // already treats an empty normalized key as invalid, and counting
-    // it there means the import result can tell the user "N contacts
-    // had no phone" instead of the row just vanishing with the total
-    // row count silently short of what's actually in the file.
-    const phone = values[phoneIdx]?.replace(/["']/g, '').trim() ?? '';
-
-    rows.push({
-      phone,
-      name:
-        nameIdx >= 0
-          ? values[nameIdx]?.replace(/["']/g, '').trim() || undefined
-          : undefined,
-      email:
-        emailIdx >= 0
-          ? values[emailIdx]?.replace(/["']/g, '').trim() || undefined
-          : undefined,
-      company:
-        companyIdx >= 0
-          ? values[companyIdx]?.replace(/["']/g, '').trim() || undefined
-          : undefined,
-      tagNames:
-        tagsIdx >= 0 ? parseTagCell(values[tagsIdx]?.replace(/["']/g, '')) : [],
+    let bestScore = 0;
+    headers.forEach((_, col) => {
+      const filled = dataRows.filter((r) => (r[col] ?? '') !== '');
+      if (filled.length === 0) return;
+      const hits = filled.filter((r) => looksLikePhone(r[col])).length;
+      const score = hits / filled.length;
+      if (score >= 0.6 && score > bestScore) {
+        bestScore = score;
+        phoneIdx = col;
+      }
     });
   }
+  if (phoneIdx === -1) return { ...EMPTY_RESULT };
+
+  const nameIdx = findColumn(headers, 'name');
+  const firstIdx = findColumn(headers, 'firstName');
+  const lastIdx = findColumn(headers, 'lastName');
+  const emailIdx = findColumn(headers, 'email');
+  const companyIdx = findColumn(headers, 'company');
+  const tagsIdx = findColumn(headers, 'tags');
+
+  const cell = (r: string[], idx: number) =>
+    idx >= 0 ? (r[idx] ?? '').trim() : '';
+
+  const rows: ParsedContactRow[] = dataRows.map((r) => {
+    const name =
+      cell(r, nameIdx) ||
+      [cell(r, firstIdx), cell(r, lastIdx)].filter(Boolean).join(' ');
+
+    return {
+      phone: cleanPhone(cell(r, phoneIdx)),
+      name: name || undefined,
+      email: cell(r, emailIdx) || undefined,
+      company: cell(r, companyIdx) || undefined,
+      tagNames: tagsIdx >= 0 ? parseTagCell(cell(r, tagsIdx)) : [],
+    };
+  });
 
   return {
     rows,
@@ -118,22 +200,19 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
   };
 }
 
-/** Simple CSV line parse (handles quoted fields). */
-function parseCsvLine(line: string): string[] {
-  const values: string[] = [];
-  let current = '';
-  let inQuotes = false;
+export async function readCsvFile(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
 
-  for (const char of line) {
-    if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
-      values.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(buf);
   }
-  values.push(current.trim());
-  return values;
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(buf);
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder('windows-1252').decode(buf);
+  }
 }
