@@ -35,9 +35,23 @@ function formatTimestamp(iso: string): string {
   });
 }
 
+function pdfSafeText(value: string): string {
+  return Array.from(value)
+    .map((ch) => {
+      const code = ch.codePointAt(0)!;
+      if (code <= 0xff) return ch;
+      const decomposed = ch.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+      return Array.from(decomposed)
+        .map((c) => (c.codePointAt(0)! <= 0xff ? c : '?'))
+        .join('');
+    })
+    .join('');
+}
+
 interface PreparedBubble {
   message: ExportMessage;
   isOutbound: boolean;
+  senderLabel: string;
   lines: string[];
   bubbleWidth: number;
   bodyHeight: number;
@@ -47,7 +61,8 @@ interface PreparedBubble {
 function prepareBubble(doc: jsPDF, message: ExportMessage): PreparedBubble {
   const isOutbound = message.senderType !== 'customer';
   doc.setFontSize(FONT_SIZE_BODY);
-  const text = message.text || '(empty message)';
+  const text = pdfSafeText(message.text || '(empty message)');
+  const senderLabel = pdfSafeText(message.senderLabel);
   const lines = doc.splitTextToSize(
     text,
     BUBBLE_MAX_WIDTH - BUBBLE_PAD_X * 2
@@ -56,9 +71,20 @@ function prepareBubble(doc: jsPDF, message: ExportMessage): PreparedBubble {
   doc.setFontSize(FONT_SIZE_BODY);
   const widestLine = lines.reduce(
     (max, l) => Math.max(max, doc.getTextWidth(l)),
-    doc.getTextWidth(message.senderLabel)
+    doc.getTextWidth(senderLabel)
   );
-  const bubbleWidth = Math.min(BUBBLE_MAX_WIDTH, widestLine + BUBBLE_PAD_X * 2);
+
+  doc.setFontSize(FONT_SIZE_META);
+  const metaText = isOutbound
+    ? `${formatTimestamp(message.createdAt)}  \u00b7  ${STATUS_LABEL[message.status] ?? message.status}`
+    : formatTimestamp(message.createdAt);
+  const metaWidth = doc.getTextWidth(metaText);
+  doc.setFontSize(FONT_SIZE_BODY);
+
+  const bubbleWidth = Math.min(
+    BUBBLE_MAX_WIDTH,
+    Math.max(widestLine, metaWidth) + BUBBLE_PAD_X * 2
+  );
 
   const bodyHeight = lines.length * LINE_HEIGHT;
   const senderLineHeight = META_LINE_HEIGHT + 1;
@@ -66,7 +92,15 @@ function prepareBubble(doc: jsPDF, message: ExportMessage): PreparedBubble {
   const totalHeight =
     BUBBLE_PAD_Y * 2 + senderLineHeight + bodyHeight + metaLineHeight;
 
-  return { message, isOutbound, lines, bubbleWidth, bodyHeight, totalHeight };
+  return {
+    message,
+    isOutbound,
+    senderLabel,
+    lines,
+    bubbleWidth,
+    bodyHeight,
+    totalHeight,
+  };
 }
 
 function drawPageChrome(
@@ -78,11 +112,15 @@ function drawPageChrome(
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(40, 40, 40);
-  doc.text(`${data.contactName} \u2014 ${data.contactPhone}`, MARGIN.side, 12);
+  doc.text(
+    `${pdfSafeText(data.contactName)} \u2014 ${pdfSafeText(data.contactPhone)}`,
+    MARGIN.side,
+    12
+  );
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(120, 120, 120);
-  doc.text(data.accountName, MARGIN.side, 16.5);
+  doc.text(pdfSafeText(data.accountName), MARGIN.side, 16.5);
   doc.text(`Page ${pageNum} of ${pageCount}`, PAGE.width - MARGIN.side, 12, {
     align: 'right',
   });
@@ -135,7 +173,7 @@ function drawBubble(
   doc.setFontSize(FONT_SIZE_META);
   doc.setTextColor(70, 70, 70);
   const label =
-    startLine > 0 ? `${message.senderLabel} (continued)` : message.senderLabel;
+    startLine > 0 ? `${bubble.senderLabel} (continued)` : bubble.senderLabel;
   doc.text(label, x + BUBBLE_PAD_X, cursorY);
 
   cursorY += LINE_HEIGHT;
