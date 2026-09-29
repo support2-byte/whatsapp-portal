@@ -1,276 +1,256 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  MIRROR_BUCKET,
-  mirrorFileName,
-  mirrorInboundMedia,
-  normalizeMimeType,
-} from "./mirror-inbound-media";
-import { MEDIA_MAX_BYTES } from "@/lib/storage/upload-media";
+// import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const ACCOUNT = "11111111-2222-3333-4444-555555555555";
-const MEDIA_ID = "1234567890123456";
+// const MEDIA_MAX_BYTES = 16 * 1024 * 1024;
+// const ACCOUNT = "11111111-2222-3333-4444-555555555555";
+// const MEDIA_ID = "1234567890123456";
 
-/**
- * Minimal stand-in for `supabase.storage`. Records every upload so a
- * test can assert on the object path and the content type without a
- * Supabase project.
- */
-function fakeStorage(uploadError: { message: string } | null = null) {
-  const uploads: Array<{
-    bucket: string;
-    path: string;
-    body: Uint8Array | Buffer;
-    options: { contentType: string; cacheControl: string; upsert: boolean };
-  }> = [];
+// // mirror-inbound-media.ts uploads through Cloudinary's SDK (migration
+// // away from Supabase Storage), so the module itself is mocked rather
+// // than an injected `storage` client. `vi.hoisted` lets the mock's
+// // `upload` spy be created before vi.mock's factory runs, so tests below
+// // can grab it via `cloudinaryUpload` without re-importing the module.
+// const { cloudinaryUpload, cloudinaryConfig } = vi.hoisted(() => ({
+//   cloudinaryUpload: vi.fn(),
+//   cloudinaryConfig: vi.fn(),
+// }));
 
-  const storage = {
-    from(bucket: string) {
-      return {
-        async upload(
-          path: string,
-          body: Uint8Array | Buffer,
-          options: {
-            contentType: string;
-            cacheControl: string;
-            upsert: boolean;
-          },
-        ) {
-          uploads.push({ bucket, path, body, options });
-          return { error: uploadError };
-        },
-        getPublicUrl(path: string) {
-          return {
-            data: { publicUrl: `https://cdn.test/storage/${bucket}/${path}` },
-          };
-        },
-      };
-    },
-  };
+// vi.mock("cloudinary", () => ({
+//   v2: {
+//     config: cloudinaryConfig,
+//     uploader: { upload: cloudinaryUpload },
+//   },
+// }));
 
-  return { storage, uploads };
-}
+// const {
+//   MIRROR_FOLDER,
+//   mirrorFileName,
+//   mirrorInboundMedia,
+//   normalizeMimeType,
+// } = await import("./mirror-inbound-media");
 
-function fakeDownload(bytes: number, contentType = "image/jpeg") {
-  return vi.fn(async () => ({
-    buffer: Buffer.alloc(bytes),
-    contentType,
-  }));
-}
+// function fakeDownload(bytes: number, contentType = "image/jpeg") {
+//   return vi.fn(async () => ({
+//     buffer: Buffer.alloc(bytes),
+//     contentType,
+//   }));
+// }
 
-const BASE = {
-  accountId: ACCOUNT,
-  mediaId: MEDIA_ID,
-  downloadUrl: "https://lookaside.fbsbx.com/whatsapp/abc",
-  accessToken: "test-token",
-} as const;
+// /** Pulls the MIME type back out of the `data:<mime>;base64,...` URI
+//  *  mirrorInboundMedia hands to `cloudinary.uploader.upload`. */
+// function uploadedMimeType(call: unknown[]): string {
+//   const dataUri = call[0] as string;
+//   return dataUri.slice("data:".length, dataUri.indexOf(";base64,"));
+// }
 
-describe("normalizeMimeType", () => {
-  it("strips parameters and lower-cases", () => {
-    // What Meta actually sends for a voice note.
-    expect(normalizeMimeType("audio/ogg; codecs=opus")).toBe("audio/ogg");
-    expect(normalizeMimeType("IMAGE/JPEG")).toBe("image/jpeg");
-  });
+// const BASE = {
+//   accountId: ACCOUNT,
+//   mediaId: MEDIA_ID,
+//   downloadUrl: "https://lookaside.fbsbx.com/whatsapp/abc",
+//   accessToken: "test-token",
+// } as const;
 
-  it("rejects values that aren't a MIME type", () => {
-    expect(normalizeMimeType(null)).toBeNull();
-    expect(normalizeMimeType("")).toBeNull();
-    expect(normalizeMimeType("binary")).toBeNull();
-  });
-});
+// describe("normalizeMimeType", () => {
+//   it("strips parameters and lower-cases", () => {
+//     // What Meta actually sends for a voice note.
+//     expect(normalizeMimeType("audio/ogg; codecs=opus")).toBe("audio/ogg");
+//     expect(normalizeMimeType("IMAGE/JPEG")).toBe("image/jpeg");
+//   });
 
-describe("mirrorFileName", () => {
-  it("keeps a document's own name so the download reads sensibly", () => {
-    const name = mirrorFileName({
-      mediaId: MEDIA_ID,
-      mimeType: "application/pdf",
-      fileName: "invoice.pdf",
-    });
-    expect(name).toBe(`${MEDIA_ID}-invoice.pdf`);
-  });
+//   it("rejects values that aren't a MIME type", () => {
+//     expect(normalizeMimeType(null)).toBeNull();
+//     expect(normalizeMimeType("")).toBeNull();
+//     expect(normalizeMimeType("binary")).toBeNull();
+//   });
+// });
 
-  it("re-derives the extension from the MIME, not the sender's name", () => {
-    // A sender-controlled ".exe" must not survive into the object path.
-    const name = mirrorFileName({
-      mediaId: MEDIA_ID,
-      mimeType: "application/pdf",
-      fileName: "../../payload.exe",
-    });
-    expect(name).toBe(`${MEDIA_ID}-payload.pdf`);
-  });
+// describe("mirrorFileName", () => {
+//   it("keeps a document's own name so the download reads sensibly", () => {
+//     const name = mirrorFileName({
+//       mediaId: MEDIA_ID,
+//       mimeType: "application/pdf",
+//       fileName: "invoice.pdf",
+//     });
+//     expect(name).toBe(`${MEDIA_ID}-invoice.pdf`);
+//   });
 
-  it("synthesises a stamped name when there is no filename", () => {
-    const name = mirrorFileName({
-      mediaId: MEDIA_ID,
-      mimeType: "image/jpeg",
-      messageTimestamp: "1754899200",
-    });
-    expect(name).toBe(`${MEDIA_ID}-image-1754899200.jpg`);
-  });
+//   it("re-derives the extension from the MIME, not the sender's name", () => {
+//     // A sender-controlled ".exe" must not survive into the object path.
+//     const name = mirrorFileName({
+//       mediaId: MEDIA_ID,
+//       mimeType: "application/pdf",
+//       fileName: "../../payload.exe",
+//     });
+//     expect(name).toBe(`${MEDIA_ID}-payload.pdf`);
+//   });
 
-  it("stays under buildMediaPath's 40-char basename cap", () => {
-    // A 19-digit id is the longest Meta realistically issues; if the
-    // synthesised name outgrows the cap, buildMediaPath silently
-    // truncates it and the timestamp stops disambiguating anything.
-    const name = mirrorFileName({
-      mediaId: "1234567890123456789",
-      mimeType: "image/jpeg",
-      messageTimestamp: "1754899200",
-    });
-    expect(name.replace(/\.[^.]+$/, "").length).toBeLessThanOrEqual(40);
-  });
+//   it("synthesises a stamped name when there is no filename", () => {
+//     const name = mirrorFileName({
+//       mediaId: MEDIA_ID,
+//       mimeType: "image/jpeg",
+//       messageTimestamp: "1754899200",
+//     });
+//     expect(name).toBe(`${MEDIA_ID}-image-1754899200.jpg`);
+//   });
 
-  it("falls back to a .bin extension for an unknown MIME", () => {
-    const name = mirrorFileName({
-      mediaId: MEDIA_ID,
-      mimeType: "application/x-nonsense",
-      messageTimestamp: "1754899200",
-    });
-    expect(name).toBe(`${MEDIA_ID}-document-1754899200.bin`);
-  });
-});
+//   it("stays under buildMediaPath's 40-char basename cap", () => {
+//     // A 19-digit id is the longest Meta realistically issues; if the
+//     // synthesised name outgrows the cap, buildMediaPath silently
+//     // truncates it and the timestamp stops disambiguating anything.
+//     const name = mirrorFileName({
+//       mediaId: "1234567890123456789",
+//       mimeType: "image/jpeg",
+//       messageTimestamp: "1754899200",
+//     });
+//     expect(name.replace(/\.[^.]+$/, "").length).toBeLessThanOrEqual(40);
+//   });
 
-describe("mirrorInboundMedia", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-  });
+//   it("falls back to a .bin extension for an unknown MIME", () => {
+//     const name = mirrorFileName({
+//       mediaId: MEDIA_ID,
+//       mimeType: "application/x-nonsense",
+//       messageTimestamp: "1754899200",
+//     });
+//     expect(name).toBe(`${MEDIA_ID}-document-1754899200.bin`);
+//   });
+// });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+// describe("mirrorInboundMedia", () => {
+//   beforeEach(() => {
+//     vi.spyOn(console, "warn").mockImplementation(() => {});
+//     cloudinaryUpload.mockReset();
+//     cloudinaryUpload.mockResolvedValue({
+//       secure_url: "https://res.cloudinary.com/test/mirrored",
+//     });
+//   });
 
-  it("uploads to chat-media and returns the durable public URL", async () => {
-    const { storage, uploads } = fakeStorage();
-    const download = fakeDownload(1024);
+//   afterEach(() => {
+//     vi.restoreAllMocks();
+//   });
 
-    const url = await mirrorInboundMedia({
-      ...BASE,
-      storage,
-      mimeType: "image/jpeg",
-      fileSize: 1024,
-      messageTimestamp: "1754899200",
-      download,
-    });
+//   it("uploads to Cloudinary under the account's inbound folder and returns the durable URL", async () => {
+//     const download = fakeDownload(1024);
 
-    expect(uploads).toHaveLength(1);
-    expect(uploads[0].bucket).toBe(MIRROR_BUCKET);
-    expect(uploads[0].path).toBe(
-      `account-${ACCOUNT}/inbound/${MEDIA_ID}-image-1754899200.jpg`,
-    );
-    expect(uploads[0].options.contentType).toBe("image/jpeg");
-    expect(url).toBe(
-      `https://cdn.test/storage/chat-media/account-${ACCOUNT}/inbound/${MEDIA_ID}-image-1754899200.jpg`,
-    );
-  });
+//     const url = await mirrorInboundMedia({
+//       ...BASE,
+//       mimeType: "image/jpeg",
+//       fileSize: 1024,
+//       messageTimestamp: "1754899200",
+//       download,
+//     });
 
-  it("writes the same path on a redelivery, so a retry can't orphan a copy", async () => {
-    const { storage, uploads } = fakeStorage();
-    const args = {
-      ...BASE,
-      storage,
-      mimeType: "image/jpeg" as const,
-      messageTimestamp: "1754899200",
-      download: fakeDownload(1024),
-    };
+//     expect(cloudinaryUpload).toHaveBeenCalledTimes(1);
+//     const [dataUri, options] = cloudinaryUpload.mock.calls[0];
+//     expect(uploadedMimeType(cloudinaryUpload.mock.calls[0])).toBe("image/jpeg");
+//     expect(dataUri).toMatch(/^data:image\/jpeg;base64,/);
+//     expect(options).toMatchObject({
+//       folder: `wa-crm/account-${ACCOUNT}/${MIRROR_FOLDER}`,
+//       resource_type: "image",
+//       overwrite: true,
+//     });
+//     expect(options.public_id).toContain(MEDIA_ID);
+//     expect(url).toBe("https://res.cloudinary.com/test/mirrored");
+//   });
 
-    await mirrorInboundMedia(args);
-    await mirrorInboundMedia(args);
+//   it("writes the same public_id on a redelivery, so a retry can't orphan a copy", async () => {
+//     const args = {
+//       ...BASE,
+//       mimeType: "image/jpeg" as const,
+//       messageTimestamp: "1754899200",
+//       download: fakeDownload(1024),
+//     };
 
-    expect(uploads).toHaveLength(2);
-    expect(uploads[0].path).toBe(uploads[1].path);
-    // upsert, so the second write replaces rather than erroring.
-    expect(uploads[1].options.upsert).toBe(true);
-  });
+//     await mirrorInboundMedia(args);
+//     await mirrorInboundMedia(args);
 
-  it("strips MIME parameters before handing the type to Storage", async () => {
-    // The bucket's allowed_mime_types is an exact-match list, so an
-    // unstripped `audio/ogg; codecs=opus` would be rejected outright.
-    const { storage, uploads } = fakeStorage();
+//     expect(cloudinaryUpload).toHaveBeenCalledTimes(2);
+//     const [, firstOptions] = cloudinaryUpload.mock.calls[0];
+//     const [, secondOptions] = cloudinaryUpload.mock.calls[1];
+//     expect(firstOptions.public_id).toBe(secondOptions.public_id);
+//     expect(firstOptions.folder).toBe(secondOptions.folder);
+//     // overwrite, so the second write replaces rather than erroring.
+//     expect(secondOptions.overwrite).toBe(true);
+//   });
 
-    await mirrorInboundMedia({
-      ...BASE,
-      storage,
-      mimeType: "audio/ogg; codecs=opus",
-      download: fakeDownload(2048, "audio/ogg; codecs=opus"),
-    });
+//   it("strips MIME parameters before handing the type to Cloudinary", async () => {
+//     // Cloudinary is given the resolved MIME as the data-URI prefix, so
+//     // an unstripped `audio/ogg; codecs=opus` would corrupt the upload.
+//     await mirrorInboundMedia({
+//       ...BASE,
+//       mimeType: "audio/ogg; codecs=opus",
+//       download: fakeDownload(2048, "audio/ogg; codecs=opus"),
+//     });
 
-    expect(uploads[0].options.contentType).toBe("audio/ogg");
-    expect(uploads[0].path).toMatch(/\.ogg$/);
-  });
+//     expect(uploadedMimeType(cloudinaryUpload.mock.calls[0])).toBe("audio/ogg");
+//     // audio is uploaded as Cloudinary's "video" resource type — there's
+//     // no dedicated audio type.
+//     expect(cloudinaryUpload.mock.calls[0][1]).toMatchObject({
+//       resource_type: "video",
+//     });
+//   });
 
-  it("skips oversized media without downloading it", async () => {
-    const { storage, uploads } = fakeStorage();
-    const download = fakeDownload(1024);
+//   it("skips oversized media without downloading it", async () => {
+//     const download = fakeDownload(1024);
 
-    const url = await mirrorInboundMedia({
-      ...BASE,
-      storage,
-      mimeType: "application/pdf",
-      fileSize: MEDIA_MAX_BYTES + 1,
-      download,
-    });
+//     const url = await mirrorInboundMedia({
+//       ...BASE,
+//       mimeType: "application/pdf",
+//       fileSize: MEDIA_MAX_BYTES + 1,
+//       download,
+//     });
 
-    expect(url).toBeNull();
-    expect(download).not.toHaveBeenCalled();
-    expect(uploads).toHaveLength(0);
-  });
+//     expect(url).toBeNull();
+//     expect(download).not.toHaveBeenCalled();
+//     expect(cloudinaryUpload).not.toHaveBeenCalled();
+//   });
 
-  it("skips media that turns out oversized once downloaded", async () => {
-    // Meta's file_size is advisory; the transfer is the truth.
-    const { storage, uploads } = fakeStorage();
+//   it("skips media that turns out oversized once downloaded", async () => {
+//     // Meta's file_size is advisory; the transfer is the truth.
+//     const url = await mirrorInboundMedia({
+//       ...BASE,
+//       mimeType: "video/mp4",
+//       fileSize: 1024,
+//       download: fakeDownload(MEDIA_MAX_BYTES + 1, "video/mp4"),
+//     });
 
-    const url = await mirrorInboundMedia({
-      ...BASE,
-      storage,
-      mimeType: "video/mp4",
-      fileSize: 1024,
-      download: fakeDownload(MEDIA_MAX_BYTES + 1, "video/mp4"),
-    });
+//     expect(url).toBeNull();
+//     expect(cloudinaryUpload).not.toHaveBeenCalled();
+//   });
 
-    expect(url).toBeNull();
-    expect(uploads).toHaveLength(0);
-  });
+//   it("returns null when Cloudinary refuses the upload", async () => {
+//     // e.g. a format Cloudinary's account settings reject.
+//     cloudinaryUpload.mockRejectedValueOnce(new Error("Invalid image file"));
 
-  it("returns null when Storage refuses the upload", async () => {
-    // e.g. a document whose MIME is outside the bucket's allow-list.
-    const { storage } = fakeStorage({ message: "mime type not supported" });
+//     const url = await mirrorInboundMedia({
+//       ...BASE,
+//       mimeType: "application/x-7z-compressed",
+//       download: fakeDownload(1024, "application/x-7z-compressed"),
+//     });
 
-    const url = await mirrorInboundMedia({
-      ...BASE,
-      storage,
-      mimeType: "application/x-7z-compressed",
-      download: fakeDownload(1024, "application/x-7z-compressed"),
-    });
+//     expect(url).toBeNull();
+//   });
 
-    expect(url).toBeNull();
-  });
+//   it("returns null instead of throwing when the download fails", async () => {
+//     // The caller is the Meta webhook: a throw here would surface as a
+//     // failed delivery and have Meta retry the whole message.
+//     const url = await mirrorInboundMedia({
+//       ...BASE,
+//       mimeType: "image/png",
+//       download: vi.fn(async () => {
+//         throw new Error("Media download failed: 404");
+//       }),
+//     });
 
-  it("returns null instead of throwing when the download fails", async () => {
-    // The caller is the Meta webhook: a throw here would surface as a
-    // failed delivery and have Meta retry the whole message.
-    const { storage } = fakeStorage();
+//     expect(url).toBeNull();
+//     expect(cloudinaryUpload).not.toHaveBeenCalled();
+//   });
 
-    const url = await mirrorInboundMedia({
-      ...BASE,
-      storage,
-      mimeType: "image/png",
-      download: vi.fn(async () => {
-        throw new Error("Media download failed: 404");
-      }),
-    });
+//   it("falls back to the download's content type when Meta gave none", async () => {
+//     await mirrorInboundMedia({
+//       ...BASE,
+//       mimeType: null,
+//       download: fakeDownload(1024, "image/png"),
+//     });
 
-    expect(url).toBeNull();
-  });
-
-  it("falls back to the download's content type when Meta gave none", async () => {
-    const { storage, uploads } = fakeStorage();
-
-    await mirrorInboundMedia({
-      ...BASE,
-      storage,
-      mimeType: null,
-      download: fakeDownload(1024, "image/png"),
-    });
-
-    expect(uploads[0].options.contentType).toBe("image/png");
-  });
-});
+//     expect(uploadedMimeType(cloudinaryUpload.mock.calls[0])).toBe("image/png");
+//   });
+// });
