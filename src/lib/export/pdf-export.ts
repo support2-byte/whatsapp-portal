@@ -113,7 +113,7 @@ function drawPageChrome(
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(40, 40, 40);
   doc.text(
-    `${pdfSafeText(data.contactName)} \u2014 ${pdfSafeText(data.contactPhone)}`,
+    `${pdfSafeText(data.contactName)}  +${pdfSafeText(data.contactPhone)}`,
     MARGIN.side,
     12
   );

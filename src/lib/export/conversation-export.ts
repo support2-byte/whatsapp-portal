@@ -55,11 +55,11 @@ function contentLabel(
 function senderLabelFor(
   m: Message,
   contactName: string,
-  profileNames: Map<string, string>
+  accountName: string
 ): string {
   if (m.sender_type === 'customer') return contactName;
   if (m.sender_type === 'bot') return 'AI Assistant';
-  const name = m.sender_id ? profileNames.get(m.sender_id) : undefined;
+  const name = m.sender_id ? accountName : 'Agent';
   return name ?? 'Agent';
 }
 
@@ -104,6 +104,8 @@ export async function fetchConversationExportData(
 
   const contactName = contact.name || contact.phone || 'Unknown contact';
 
+  console.log(JSON.stringify(allMessages, null, 2));
+
   return {
     accountName,
     contactName,
@@ -115,7 +117,7 @@ export async function fetchConversationExportData(
     messages: allMessages.map((m) => ({
       id: m.id,
       whatsappMessageId: m.message_id ?? null,
-      senderLabel: senderLabelFor(m, contactName, profileNames),
+      senderLabel: senderLabelFor(m, contactName, accountName),
       senderType: m.sender_type,
       contentType: m.content_type,
       text: contentLabel(m),
