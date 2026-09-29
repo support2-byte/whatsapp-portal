@@ -61,7 +61,7 @@ export function ExportChatMenu({ conversation, contact }: ExportChatMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:opacity-60"
+        className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 w-9 items-center justify-center rounded-md transition-colors disabled:opacity-60"
         disabled={exporting !== null}
         title={t('exportChat')}
         aria-label={t('exportChat')}
@@ -72,7 +72,10 @@ export function ExportChatMenu({ conversation, contact }: ExportChatMenuProps) {
           <Download className="h-3.5 w-3.5" />
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="border-border bg-popover">
+      <DropdownMenuContent
+        align="end"
+        className="border-border bg-popover w-44"
+      >
         <DropdownMenuItem
           onClick={() => handleExport('pdf')}
           className="text-popover-foreground text-sm"
@@ -80,6 +83,7 @@ export function ExportChatMenu({ conversation, contact }: ExportChatMenuProps) {
           <FileDown className="h-3.5 w-3.5" />
           {t('exportAsPdf')}
         </DropdownMenuItem>
+
         <DropdownMenuItem
           onClick={() => handleExport('text')}
           className="text-popover-foreground text-sm"

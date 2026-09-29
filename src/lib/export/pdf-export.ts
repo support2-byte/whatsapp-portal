@@ -1,10 +1,34 @@
 import { jsPDF } from 'jspdf';
 import type { ExportData, ExportMessage } from './conversation-export';
 import { exportFileStem } from './conversation-export';
+import { loadImageAsBase64 } from './logo-format';
 
 const PAGE = { width: 210, height: 297 };
-const MARGIN = { top: 22, bottom: 16, side: 12 };
-const HEADER_HEIGHT = 16;
+
+const MARGIN = {
+  top: 41,
+  bottom: 22,
+  side: 12,
+};
+
+const HEADER_HEIGHT = 23;
+
+const COMPANY = {
+  name: 'Royal Gulf Shipping & Logistics',
+  address:
+    '21 6a st - Ras Al Khor Industrial Area 2 - Dubai - United Arab Emirates',
+  phone: '+971 50 972 4214',
+  email: 'info@royalgulfshipping.com',
+  website: 'royalgulfshipping.com',
+};
+
+const BRAND = {
+  teal: [9, 125, 118] as [number, number, number],
+  orange: [243, 129, 32] as [number, number, number],
+  dark: [35, 45, 45] as [number, number, number],
+  gray: [105, 105, 105] as [number, number, number],
+  lightGray: [225, 225, 225] as [number, number, number],
+};
 const CONTENT_WIDTH = PAGE.width - MARGIN.side * 2;
 const BUBBLE_MAX_WIDTH = CONTENT_WIDTH * 0.72;
 const BUBBLE_PAD_X = 4;
@@ -17,11 +41,35 @@ const FONT_SIZE_META = 7.2;
 
 const STATUS_LABEL: Record<string, string> = {
   sending: 'Sending',
-  sent: 'Sent \u2713',
-  delivered: 'Delivered \u2713\u2713',
-  read: 'Read \u2713\u2713',
+  sent: '✓',
+  delivered: '✓✓',
+  read: '✓✓',
   failed: 'Failed',
 };
+
+function drawSingleTick(doc: jsPDF, x: number, y: number) {
+  doc.setDrawColor(110, 110, 110);
+  doc.setLineWidth(0.35);
+
+  doc.line(x, y - 1.7, x + 1.2, y - 0.5);
+  doc.line(x + 1.2, y - 0.5, x + 3.2, y - 2.4);
+}
+
+function drawDoubleTick(doc: jsPDF, x: number, y: number, blue = false) {
+  if (blue) {
+    doc.setDrawColor(53, 125, 190);
+  } else {
+    doc.setDrawColor(110, 110, 110);
+  }
+
+  doc.setLineWidth(0.35);
+
+  doc.line(x, y - 1.7, x + 1.2, y - 0.5);
+  doc.line(x + 1.2, y - 0.5, x + 3.2, y - 2.4);
+
+  doc.line(x + 1.8, y - 1.7, x + 3.0, y - 0.5);
+  doc.line(x + 3.0, y - 0.5, x + 5.0, y - 2.4);
+}
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -107,37 +155,146 @@ function drawPageChrome(
   doc: jsPDF,
   data: ExportData,
   pageNum: number,
-  pageCount: number
+  pageCount: number,
+  logoBase64: string | null
 ) {
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(40, 40, 40);
-  doc.text(
-    `${pdfSafeText(data.contactName)}  +${pdfSafeText(data.contactPhone)}`,
-    MARGIN.side,
-    12
-  );
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(120, 120, 120);
-  doc.text(pdfSafeText(data.accountName), MARGIN.side, 16.5);
-  doc.text(`Page ${pageNum} of ${pageCount}`, PAGE.width - MARGIN.side, 12, {
+  const pageWidth = PAGE.width;
+  const pageHeight = PAGE.height;
+
+  doc.setFillColor(...BRAND.teal);
+  doc.rect(0, 0, pageWidth, 2, 'F');
+
+  let headerX = MARGIN.side;
+
+  if (logoBase64) {
+    try {
+      const props = doc.getImageProperties(logoBase64);
+
+      const maxW = 24;
+      const maxH = 15;
+
+      const ratio = props.width / props.height;
+
+      let logoW = maxW;
+      let logoH = logoW / ratio;
+
+      if (logoH > maxH) {
+        logoH = maxH;
+        logoW = logoH * ratio;
+      }
+
+      doc.addImage(logoBase64, 'PNG', MARGIN.side, 6, logoW, logoH);
+
+      headerX += logoW + 5;
+    } catch {}
+  }
+
+  doc
+    .setFont('helvetica', 'bold')
+    .setFontSize(10.5)
+    .setTextColor(...BRAND.teal);
+
+  doc.text(COMPANY.name, headerX, 9);
+
+  doc
+    .setFont('helvetica', 'normal')
+    .setFontSize(6.4)
+    .setTextColor(...BRAND.gray);
+
+  doc.text(COMPANY.address, headerX, 13);
+
+  doc.setFontSize(6.4).setTextColor(...BRAND.gray);
+
+  doc.text(`${COMPANY.phone}  |  ${COMPANY.email}`, headerX, 16.5);
+
+  doc
+    .setFont('helvetica', 'bold')
+    .setFontSize(13)
+    .setTextColor(...BRAND.orange);
+
+  doc.text('CHAT EXPORT', pageWidth - MARGIN.side, 9, { align: 'right' });
+
+  doc
+    .setFont('helvetica', 'normal')
+    .setFontSize(6.8)
+    .setTextColor(...BRAND.gray);
+
+  doc.text('CONVERSATION TRANSCRIPT', pageWidth - MARGIN.side, 13, {
     align: 'right',
   });
-  doc.setDrawColor(220, 220, 220);
-  doc.line(
+
+  doc.setFontSize(6.8).setTextColor(...BRAND.gray);
+
+  doc.text(`Page ${pageNum} of ${pageCount}`, pageWidth - MARGIN.side, 17, {
+    align: 'right',
+  });
+
+  doc.setDrawColor(...BRAND.lightGray);
+  doc.setLineWidth(0.3);
+
+  doc.line(MARGIN.side, HEADER_HEIGHT, pageWidth - MARGIN.side, HEADER_HEIGHT);
+
+  doc
+    .setFont('helvetica', 'bold')
+    .setFontSize(8.5)
+    .setTextColor(...BRAND.dark);
+
+  doc.text(
+    `${pdfSafeText(data.contactName)}  ${pdfSafeText(data.contactPhone)}`,
     MARGIN.side,
-    HEADER_HEIGHT + 2,
-    PAGE.width - MARGIN.side,
-    HEADER_HEIGHT + 2
+    29
   );
 
-  doc.setFontSize(6.8);
-  doc.setTextColor(150, 150, 150);
+  doc
+    .setFont('helvetica', 'normal')
+    .setFontSize(6.8)
+    .setTextColor(...BRAND.gray);
+
+  doc.text(pdfSafeText(data.accountName), MARGIN.side, 33);
+
+  doc.setDrawColor(...BRAND.lightGray);
+  doc.setLineWidth(0.3);
+
+  doc.line(MARGIN.side, 37, pageWidth - MARGIN.side, 37);
+
+  doc.saveGraphicsState();
+
+  doc.setTextColor(235, 242, 241);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(28);
+
+  doc.text('ROYAL GULF SHIPPING', pageWidth / 2, pageHeight / 2, {
+    align: 'center',
+    angle: 35,
+  });
+
+  doc.restoreGraphicsState();
+
+  const footerY = pageHeight - 16;
+
+  doc.setFillColor(...BRAND.orange);
+  doc.rect(0, footerY - 1.2, pageWidth, 1.2, 'F');
+
+  doc.setFillColor(...BRAND.teal);
+  doc.rect(0, footerY, pageWidth, 16, 'F');
+
+  doc.setFont('helvetica', 'normal').setFontSize(7).setTextColor(255, 255, 255);
+
+  doc.text(`Tel: ${COMPANY.phone}`, MARGIN.side, footerY + 7);
+
+  doc.text(COMPANY.email, pageWidth / 2, footerY + 7, { align: 'center' });
+
+  doc.text(COMPANY.website, pageWidth - MARGIN.side, footerY + 7, {
+    align: 'right',
+  });
+
+  doc.setFontSize(5.8).setTextColor(220, 235, 233);
+
   doc.text(
-    'Exported chat log \u2014 generated automatically from stored WhatsApp Business API records.',
-    MARGIN.side,
-    PAGE.height - 9
+    'Generated automatically from stored WhatsApp Business API records.',
+    pageWidth / 2,
+    footerY + 11.5,
+    { align: 'center' }
   );
 }
 
@@ -186,20 +343,52 @@ function drawBubble(
   });
 
   const isLastChunk = (endLine ?? bubble.lines.length) >= bubble.lines.length;
+  doc.setCharSpace(0);
+  doc.setFont('helvetica', 'normal');
   doc.setFontSize(FONT_SIZE_META);
   doc.setTextColor(110, 110, 110);
-  const metaParts = [formatTimestamp(message.createdAt)];
+  const metaY = cursorY + 1.5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(FONT_SIZE_META);
+  doc.setTextColor(110, 110, 110);
+
+  const timestamp = formatTimestamp(message.createdAt);
+
+  doc.text(timestamp, x + BUBBLE_PAD_X, metaY);
+
+  let metaX = x + BUBBLE_PAD_X + doc.getTextWidth(timestamp) + 2;
+
   if (isOutbound && isLastChunk) {
-    metaParts.push(STATUS_LABEL[message.status] ?? message.status);
+    const status = message.status;
+
+    if (status === 'sent') {
+      drawSingleTick(doc, metaX, metaY);
+    } else if (status === 'delivered') {
+      drawDoubleTick(doc, metaX, metaY, false);
+    } else if (status === 'read') {
+      drawDoubleTick(doc, metaX, metaY, true);
+    } else if (status === 'failed') {
+      doc.setTextColor(180, 60, 60);
+      doc.text('Failed', metaX, metaY);
+    }
   }
-  if (!isLastChunk) metaParts.push('continues on next page \u2192');
-  doc.text(metaParts.join('  \u00b7  '), x + BUBBLE_PAD_X, cursorY + 1.5);
+
+  if (!isLastChunk) {
+    doc.setTextColor(110, 110, 110);
+
+    const separator = ' · ';
+    const separatorX = metaX + 8;
+
+    doc.text(`${separator}continues on next page →`, separatorX, metaY);
+  }
 
   return height;
 }
 
-export function buildAndDownloadPdf(data: ExportData) {
+export async function buildAndDownloadPdf(data: ExportData) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const logoBase64 = await loadImageAsBase64('./logo-2.png').catch(() => null);
   const usableHeight = PAGE.height - MARGIN.top - MARGIN.bottom;
 
   const bubbles = data.messages.map((m) => prepareBubble(doc, m));
@@ -253,7 +442,7 @@ export function buildAndDownloadPdf(data: ExportData) {
   const pageCount = pages.length;
   pages.forEach((chunks, i) => {
     if (i > 0) doc.addPage();
-    drawPageChrome(doc, data, i + 1, pageCount);
+    drawPageChrome(doc, data, i + 1, pageCount, logoBase64);
     let cursorY = MARGIN.top;
     chunks.forEach(({ bubble, startLine, endLine }) => {
       const h = drawBubble(doc, bubble, cursorY, startLine, endLine);
