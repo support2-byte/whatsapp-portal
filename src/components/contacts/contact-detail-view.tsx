@@ -6,6 +6,7 @@ import { addContactTag, deleteContactTag } from '@/lib/contacts/tag-api';
 import { useAuth } from '@/hooks/use-auth';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
+import { SentTemplateChips } from '@/components/contacts/sent-template-chips';
 import type { Contact, Tag, ContactTag, ContactNote, CustomField, ContactCustomValue, Deal, MessageTemplate } from '@/types';
 import {
   TemplatePicker,
@@ -69,6 +70,7 @@ export function ContactDetailView({
   // with this contact by sending an approved template. The send route
   // find-or-creates the conversation, so no inbound message is required.
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [templateRefresh, setTemplateRefresh] = useState(0);
   const [sendingTemplate, setSendingTemplate] = useState(false);
 
   // Details tab
@@ -370,6 +372,7 @@ export function ContactDetailView({
       }
 
       toast.success(t('toastTemplateSent', { name: template.name }));
+      setTemplateRefresh((n) => n + 1);
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'network error';
       toast.error(`Failed to send template: ${reason}`);
@@ -444,7 +447,7 @@ export function ContactDetailView({
                   </div>
                 </div>
               </div>
-              <div className="mt-3">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button
                   size="sm"
                   onClick={() => setTemplatePickerOpen(true)}
@@ -458,6 +461,10 @@ export function ContactDetailView({
                   )}
                   {t('sendTemplateBtn')}
                 </Button>
+                <SentTemplateChips
+                  phone={contact?.phone}
+                  refreshKey={templateRefresh}
+                />
               </div>
             </SheetHeader>
 

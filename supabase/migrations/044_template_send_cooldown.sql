@@ -31,7 +31,7 @@ CREATE OR REPLACE FUNCTION claim_template_send(
   p_phone_normalized TEXT,
   p_contact_id UUID,
   p_user_id UUID,
-  p_window_minutes INTEGER DEFAULT 60
+  p_window_minutes INTEGER DEFAULT 1440
 )
 RETURNS TABLE (claimed BOOLEAN, log_id UUID, last_sent_at TIMESTAMPTZ)
 LANGUAGE plpgsql

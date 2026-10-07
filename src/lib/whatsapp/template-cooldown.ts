@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export const TEMPLATE_COOLDOWN_MINUTES = 60;
+export const TEMPLATE_COOLDOWN_MINUTES = 24 * 60;
 export const TEMPLATE_COOLDOWN_MS = TEMPLATE_COOLDOWN_MINUTES * 60 * 1000;
 
 export function phoneKey(phone: string): string {
@@ -67,10 +67,22 @@ export function cooldownRemainingSeconds(
 }
 
 export function formatRemaining(seconds: number): string {
-  const minutes = Math.max(1, Math.ceil(seconds / 60));
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  const totalMinutes = Math.max(1, Math.ceil(seconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  if (minutes === 0) return hours === 1 ? "1 hour" : `${hours} hours`;
+  return `${hours}h ${minutes}m`;
+}
+
+export function formatCountdown(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return [h, m, sec].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
 export function cooldownMessage(lastSentAt: string): string {
-  return `Already sent. This template was sent to this number within the last hour. You can send it again in ${formatRemaining(cooldownRemainingSeconds(lastSentAt))}.`;
+  return `Already sent. This template was sent to this number within the last 24 hours. You can send it again in ${formatRemaining(cooldownRemainingSeconds(lastSentAt))}.`;
 }

@@ -35,6 +35,7 @@ import {
   type TemplateClaim,
 } from '@/lib/whatsapp/template-cooldown';
 
+/** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
   readonly code: string;
   readonly status: number;
@@ -47,7 +48,9 @@ export class BroadcastError extends Error {
 }
 
 export interface BroadcastRecipientInput {
+  /** E.164 phone. */
   to: string;
+  /** Positional body params for the template ({{1}}, {{2}}…). */
   params?: string[];
 }
 
@@ -73,6 +76,7 @@ export interface BroadcastPlan {
   accessToken: string;
   templateRow: MessageTemplate | null;
   planned: PlannedRecipient[];
+  /** Phones rejected up front (invalid E.164) — counted as failed. */
   rejected: number;
 }
 
@@ -110,6 +114,8 @@ export async function createBroadcast(
     );
   }
 
+  // Config (fail fast + provides the audit trail owner already resolved
+  // by the caller). Meta send needs phone_number_id + decrypted token.
   const { data: config, error: configError } = await db
     .from('whatsapp_config')
     .select('*')
@@ -124,6 +130,8 @@ export async function createBroadcast(
   }
   const accessToken = decrypt(config.access_token);
 
+  // Template row (once) for header/button components; guard a
+  // malformed local row rather than N identical opaque failures.
   const resolvedTemplate = await resolveTemplateRow(
     db,
     accountId,
@@ -138,6 +146,12 @@ export async function createBroadcast(
     );
   }
   const templateRow = resolvedTemplate.row;
+
+  // Resolve each recipient to a contact. Invalid phones are dropped
+  // (counted as rejected) rather than aborting the whole broadcast.
+  // `to` is raw integrator input, so the leading `+` is required — a
+  // national-format number would otherwise be delivered to whichever
+  // country its leading digits spell (issue #586).
   const resolved: { contactId: string; phone: string; params: string[] }[] = [];
   let rejected = 0;
   for (const r of recipients) {
@@ -159,6 +173,11 @@ export async function createBroadcast(
     });
   }
 
+  // Collapse recipients that resolved to the SAME contact (the caller
+  // listed a phone twice, or two numbers fuzzy-matched to one contact).
+  // Keep the first occurrence so the contact is messaged once and its
+  // params aren't silently overwritten by a later duplicate — and so
+  // the row↔params pairing below (keyed by contact_id) is unambiguous.
   const seenContact = new Set<string>();
   const deduped = resolved.filter((r) => {
     if (seenContact.has(r.contactId)) return false;
@@ -174,6 +193,21 @@ export async function createBroadcast(
     );
   }
 
+  // Persist the broadcast + its recipients. The count columns
+  // (sent/delivered/read/replied/failed) are owned by the DB aggregate
+  // trigger (migrations 003/005) and derived purely from
+  // broadcast_recipients rows — we deliberately do NOT seed them here
+  // (a manual value would be clobbered by the trigger on the first
+  // recipient change). `rejected` phones have no recipient row, so they
+  // are reported to the caller in the POST response, not in these
+  // persisted counts.
+  // Insert the parent broadcast and its recipient rows in ONE transaction
+  // (migration 037's create_broadcast_with_recipients). Previously these
+  // were two separate inserts: if the recipient insert failed, the parent
+  // was already persisted with status 'sending' and no recipients, leaving
+  // an orphaned campaign that looked like it was sending but had no
+  // delivery plan (issue #370). The function body is atomic, so a recipient
+  // failure now rolls the parent back and nothing orphaned survives.
   const { data: createdRows, error: createErr } = await db.rpc(
     'create_broadcast_with_recipients',
     {
@@ -184,6 +218,8 @@ export async function createBroadcast(
       p_template_language: resolvedTemplate.language,
       p_total_recipients: deduped.length,
       p_contact_ids: deduped.map((r) => r.contactId),
+      // Frozen per-recipient params (migration 038) — without them a
+      // resume of this broadcast has no way to reconstruct {{1}}.
       p_template_params: deduped.map((r) => r.params),
     }
   );
@@ -194,15 +230,13 @@ export async function createBroadcast(
 
   const broadcastId = createdRows[0].broadcast_id as string;
 
+  // Pair each inserted recipient row back to its phone/params by
+  // contact_id — unambiguous now that duplicates are collapsed.
   const byContact = new Map(deduped.map((r) => [r.contactId, r]));
   const planned: PlannedRecipient[] = createdRows.map(
     (row: { recipient_id: string; contact_id: string }) => {
       const r = byContact.get(row.contact_id)!;
-      return {
-        recipientRowId: row.recipient_id,
-        phone: r.phone,
-        params: r.params,
-      };
+      return { recipientRowId: row.recipient_id, phone: r.phone, params: r.params };
     }
   );
 
@@ -251,9 +285,7 @@ export async function deliverBroadcast(
         .update({
           status: 'failed',
           error_message:
-            claimError instanceof Error
-              ? claimError.message
-              : 'Cooldown check failed',
+            claimError instanceof Error ? claimError.message : 'Cooldown check failed',
         })
         .eq('id', recipient.recipientRowId);
       continue;
@@ -288,8 +320,7 @@ export async function deliverBroadcast(
         lastError = null;
         break;
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
+        const message = error instanceof Error ? error.message : 'Unknown error';
         lastError = message;
         // Only a "recipient not allowed" error is worth another variant.
         if (!isRecipientNotAllowedError(message)) break;
