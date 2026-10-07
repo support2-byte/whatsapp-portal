@@ -163,6 +163,7 @@
       "exportChat": "Export chat",
       "exportAsPdf": "Export as PDF",
       "exportAsText": "Export as text (legal record)",
+      "exportAsZip": "Export as ZIP (PDF + text + media)",
       "exportSuccess": "Export downloaded.",
       "exportFailed": "Couldn't export this chat. Try again.",
       "exportEmpty": "This conversation has no messages to export.",

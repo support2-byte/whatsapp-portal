@@ -1,5 +1,9 @@
 import type { ExportData, ExportMessage } from './conversation-export';
-import { downloadBlob, exportFileStem } from './conversation-export';
+import {
+  archiveMediaFileName,
+  downloadBlob,
+  exportFileStem,
+} from './conversation-export';
 
 const COMPANY = {
   name: 'Royal Gulf Shipping & Logistics',
@@ -56,8 +60,15 @@ function formatMessageText(text: string): string[] {
   return value.split(/\r?\n/).map((line) => `  ${line}`);
 }
 
-function formatAttachment(mediaUrl: string): string[] {
-  return ['Attachment:', `  ${mediaUrl}`];
+function formatAttachment(
+  mediaUrl: string,
+  archiveFileName: string | null
+): string[] {
+  const lines = ['Attachment:', `  Source URL: ${mediaUrl}`];
+  if (archiveFileName) {
+    lines.push(`  Archived as: media/${archiveFileName}`);
+  }
+  return lines;
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -105,7 +116,12 @@ export function buildTextTranscriptBody(data: ExportData): string {
 
     if (message.mediaUrl) {
       lines.push('');
-      lines.push(...formatAttachment(message.mediaUrl));
+      lines.push(
+        ...formatAttachment(
+          message.mediaUrl,
+          archiveMediaFileName(message, index)
+        )
+      );
     }
 
     lines.push('');

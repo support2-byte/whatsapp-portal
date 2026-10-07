@@ -11,9 +11,8 @@ export interface ExportMessage {
   mediaUrl: string | null;
   mediaType: string | null;
   status: Message['status'];
-  createdAt: string; // ISO
+  createdAt: string;
 }
-
 export interface ExportData {
   accountName: string;
   contactName: string;
@@ -59,8 +58,57 @@ function senderLabelFor(
 ): string {
   if (m.sender_type === 'customer') return contactName;
   if (m.sender_type === 'bot') return 'AI Assistant';
-  const name = m.sender_id ? accountName : 'Agent';
-  return name ?? 'Agent';
+  const name = m.sender_id ? accountName : 'You';
+  return name ?? 'You';
+}
+
+const MEDIA_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'video/mp4': 'mp4',
+  'video/3gpp': '3gp',
+  'video/quicktime': 'mov',
+  'audio/ogg': 'ogg',
+  'audio/opus': 'opus',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/amr': 'amr',
+  'audio/aac': 'aac',
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+};
+
+function extensionFromUrl(url: string): string | null {
+  const clean = url.split('?')[0].split('#')[0];
+  const match = clean.match(/\.([a-zA-Z0-9]{1,5})$/);
+  return match ? match[1].toLowerCase() : null;
+}
+
+export function archiveMediaFileName(
+  message: Pick<ExportMessage, 'mediaUrl' | 'mediaType' | 'senderType'>,
+  index: number
+): string | null {
+  if (!message.mediaUrl) return null;
+  const number = String(index + 1).padStart(3, '0');
+  const sender =
+    message.senderType === 'customer'
+      ? 'customer'
+      : message.senderType === 'bot'
+        ? 'bot'
+        : 'agent';
+  const ext =
+    MEDIA_EXTENSIONS[(message.mediaType ?? '').toLowerCase()] ??
+    extensionFromUrl(message.mediaUrl) ??
+    'bin';
+  return `${number}_${sender}.${ext}`;
 }
 
 export async function fetchConversationExportData(
