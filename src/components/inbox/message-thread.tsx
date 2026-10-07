@@ -1073,6 +1073,7 @@ export function MessageThread({
         open={templateModalOpen}
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
+        contactPhone={contact?.phone}
       />
 
       <MediaLightbox
