@@ -9,7 +9,12 @@ import {
 } from "@/lib/inbox/conversations";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X } from "lucide-react";
+import { Search, ChevronDown, X, LayoutTemplate } from "lucide-react";
+import {
+  useSentTemplateSummary,
+  type SentTemplateInfo,
+} from "@/hooks/use-sent-template-summary";
+import { phoneKey } from "@/lib/whatsapp/template-cooldown";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
@@ -54,6 +59,7 @@ export function ConversationList({
   resyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
+  const sentTemplates = useSentTemplateSummary(conversations, resyncToken);
   
   const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
     { label: t("filterAll"), value: "all" },
@@ -413,6 +419,11 @@ export function ConversationList({
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                sentTemplate={
+                  conv.contact?.phone
+                    ? sentTemplates.get(phoneKey(conv.contact.phone))
+                    : undefined
+                }
                 t={t}
               />
             ))}
@@ -427,6 +438,7 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  sentTemplate?: SentTemplateInfo;
   t: ReturnType<typeof useTranslations>;
 }
 
@@ -434,6 +446,7 @@ function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  sentTemplate,
   t,
 }: ConversationItemProps) {
   const contact = conversation.contact;
@@ -498,6 +511,15 @@ function ConversationItem({
             />
           </div>
         </div>
+        {sentTemplate && (
+          <span
+            title={`Template sent: ${sentTemplate.names.join(", ")}. Last sent ${new Date(sentTemplate.lastSentAt).toLocaleString()}`}
+            className="mt-1 inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+          >
+            <LayoutTemplate className="h-3 w-3" />
+            Template sent
+          </span>
+        )}
       </div>
     </button>
   );
