@@ -23,6 +23,12 @@ import {
 } from "lucide-react";
 import { extractVariableIndices } from "@/lib/whatsapp/template-validators";
 import { useTranslations } from "next-intl";
+import {
+  TEMPLATE_COOLDOWN_MS,
+  cooldownRemainingSeconds,
+  formatRemaining,
+  phoneKey,
+} from "@/lib/whatsapp/template-cooldown";
 
 export interface TemplateSendValues {
   body: string[];
@@ -34,6 +40,7 @@ interface TemplatePickerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (template: MessageTemplate, values: TemplateSendValues) => void;
+  contactPhone?: string | null;
 }
 
 function renderBodyPreview(body: string, params: string[]): string {
@@ -78,8 +85,14 @@ export function TemplatePicker({
   open,
   onOpenChange,
   onSelect,
+  contactPhone,
 }: TemplatePickerProps) {
   const t = useTranslations("Inbox.templatePicker");
+  const [recent, setRecent] = useState<{
+    key: string;
+    sends: Record<string, string>;
+  }>({ key: "", sends: {} });
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,6 +144,43 @@ export function TemplatePicker({
       cancelled = true;
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !contactPhone) return;
+    const key = phoneKey(contactPhone);
+    if (!key) return;
+    let cancelled = false;
+    (async () => {
+      const supabase = createClient();
+      const cutoff = new Date(Date.now() - TEMPLATE_COOLDOWN_MS).toISOString();
+      const { data } = await supabase
+        .from("template_send_log")
+        .select("template_name, sent_at")
+        .eq("phone_normalized", key)
+        .gte("sent_at", cutoff);
+      if (cancelled) return;
+      const sends: Record<string, string> = {};
+      for (const row of (data ?? []) as { template_name: string; sent_at: string }[]) {
+        if (!sends[row.template_name] || row.sent_at > sends[row.template_name]) {
+          sends[row.template_name] = row.sent_at;
+        }
+      }
+      setRecent({ key, sends });
+      setNowMs(Date.now());
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, contactPhone]);
+
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => setNowMs(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, [open]);
+
+  const recentSends =
+    contactPhone && recent.key === phoneKey(contactPhone) ? recent.sends : {};
 
   function resetSelection() {
     setSelected(null);
@@ -216,12 +266,17 @@ export function TemplatePicker({
                 </p>
               </div>
             ) : (
-              templates.map((t) => (
+              templates.map((t) => {
+                const sentAt = recentSends[t.name];
+                const remaining = sentAt ? cooldownRemainingSeconds(sentAt, nowMs) : 0;
+                const blocked = remaining > 0;
+                return (
                 <button
                   key={t.id}
                   type="button"
+                  disabled={blocked}
                   onClick={() => pickTemplate(t)}
-                  className="w-full rounded-md border border-border bg-background/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-popover"
+                  className="w-full rounded-md border border-border bg-background/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-popover disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-border disabled:hover:bg-background/50"
                 >
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
@@ -237,6 +292,11 @@ export function TemplatePicker({
                             {t.language}
                           </span>
                         )}
+                        {blocked && (
+                          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                            Already sent. Available again in {formatRemaining(remaining)}
+                          </span>
+                        )}
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
                         {t.body_text}
@@ -245,7 +305,8 @@ export function TemplatePicker({
                     <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
                   </div>
                 </button>
-              ))
+                );
+              })
             )}
           </div>
         ) : (

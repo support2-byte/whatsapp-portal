@@ -1058,7 +1058,7 @@ export function TemplateManager() {
                         <Input
                           placeholder={t('btnLabelPlaceholder')}
                           value={btn.text}
-                          maxLength={TEMPLATE_LIMITS.buttonTextMaxLength}
+                          maxLength={100}
                           onChange={(e) =>
                             updateButton(i, { text: e.target.value })
                           }
