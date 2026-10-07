@@ -49,6 +49,7 @@ import {
 } from './message-composer';
 import { deleteAccountMedia } from '@/lib/storage/upload-media';
 import { TemplatePicker } from './template-picker';
+import { notifyTemplateSent } from '@/lib/whatsapp/template-events';
 import { AiThreadBanner } from './ai-thread-banner';
 import { ExportChatMenu } from './export-chat-menu';
 import { buildReplyPreview } from './reply-quote';
@@ -634,6 +635,7 @@ export function MessageThread({
         }
 
         onUpdateMessage(tempId, { status: 'sent' });
+        notifyTemplateSent();
       } catch (err) {
         console.error('Failed to send template:', err);
         const reason = err instanceof Error ? err.message : 'network error';
