@@ -24,11 +24,10 @@ import {
 import { extractVariableIndices } from "@/lib/whatsapp/template-validators";
 import { useTranslations } from "next-intl";
 import {
-  TEMPLATE_COOLDOWN_MS,
   cooldownRemainingSeconds,
   formatRemaining,
-  phoneKey,
 } from "@/lib/whatsapp/template-cooldown";
+import { useTemplateCooldowns } from "@/hooks/use-template-cooldowns";
 
 export interface TemplateSendValues {
   body: string[];
@@ -88,11 +87,7 @@ export function TemplatePicker({
   contactPhone,
 }: TemplatePickerProps) {
   const t = useTranslations("Inbox.templatePicker");
-  const [recent, setRecent] = useState<{
-    key: string;
-    sends: Record<string, string>;
-  }>({ key: "", sends: {} });
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const { sends: recentSends, nowMs } = useTemplateCooldowns(contactPhone, open);
 
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,43 +139,6 @@ export function TemplatePicker({
       cancelled = true;
     };
   }, [open]);
-
-  useEffect(() => {
-    if (!open || !contactPhone) return;
-    const key = phoneKey(contactPhone);
-    if (!key) return;
-    let cancelled = false;
-    (async () => {
-      const supabase = createClient();
-      const cutoff = new Date(Date.now() - TEMPLATE_COOLDOWN_MS).toISOString();
-      const { data } = await supabase
-        .from("template_send_log")
-        .select("template_name, sent_at")
-        .eq("phone_normalized", key)
-        .gte("sent_at", cutoff);
-      if (cancelled) return;
-      const sends: Record<string, string> = {};
-      for (const row of (data ?? []) as { template_name: string; sent_at: string }[]) {
-        if (!sends[row.template_name] || row.sent_at > sends[row.template_name]) {
-          sends[row.template_name] = row.sent_at;
-        }
-      }
-      setRecent({ key, sends });
-      setNowMs(Date.now());
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, contactPhone]);
-
-  useEffect(() => {
-    if (!open) return;
-    const id = setInterval(() => setNowMs(Date.now()), 30000);
-    return () => clearInterval(id);
-  }, [open]);
-
-  const recentSends =
-    contactPhone && recent.key === phoneKey(contactPhone) ? recent.sends : {};
 
   function resetSelection() {
     setSelected(null);
