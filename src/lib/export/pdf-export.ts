@@ -1,6 +1,10 @@
 import { jsPDF } from 'jspdf';
 import type { ExportData, ExportMessage } from './conversation-export';
-import { exportFileStem } from './conversation-export';
+import {
+  archiveMediaFileName,
+  downloadBlob,
+  exportFileStem,
+} from './conversation-export';
 import { loadImageAsBase64 } from './logo-format';
 
 const PAGE = { width: 210, height: 297 };
@@ -38,6 +42,13 @@ const META_LINE_HEIGHT = 3.6;
 const BUBBLE_GAP = 3.5;
 const FONT_SIZE_BODY = 9.5;
 const FONT_SIZE_META = 7.2;
+const FONT_SIZE_REF = 6.4;
+
+const IMAGE_MAX_WIDTH = BUBBLE_MAX_WIDTH - BUBBLE_PAD_X * 2;
+const IMAGE_MAX_HEIGHT = 80;
+const IMAGE_CAPTION_GAP = 2;
+const REF_LINE_HEIGHT = 3.4;
+const REF_LINE_GAP = 1;
 
 const STATUS_LABEL: Record<string, string> = {
   sending: 'Sending',
@@ -96,25 +107,124 @@ function pdfSafeText(value: string): string {
     .join('');
 }
 
+function captionFromPlaceholder(text: string): string {
+  return text.replace(/^\[(?:Image|Video|Document)\]\s*/, '').trim();
+}
+
+type JsPdfImageFormat = 'JPEG' | 'PNG' | 'WEBP' | 'GIF' | 'BMP';
+
+function jsPdfImageFormat(mimeType: string | null): JsPdfImageFormat | null {
+  switch ((mimeType ?? '').toLowerCase()) {
+    case 'image/jpeg':
+    case 'image/jpg':
+      return 'JPEG';
+    case 'image/png':
+      return 'PNG';
+    case 'image/webp':
+      return 'WEBP';
+    case 'image/gif':
+      return 'GIF';
+    case 'image/bmp':
+      return 'BMP';
+    default:
+      return null;
+  }
+}
+
+function blobToDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () =>
+      reject(reader.error ?? new Error('Failed to read blob'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function fitImageMm(pixelWidth: number, pixelHeight: number) {
+  if (pixelWidth <= 0 || pixelHeight <= 0) return { width: 0, height: 0 };
+  let width = IMAGE_MAX_WIDTH;
+  let height = (pixelHeight / pixelWidth) * width;
+  if (height > IMAGE_MAX_HEIGHT) {
+    const scale = IMAGE_MAX_HEIGHT / height;
+    height = IMAGE_MAX_HEIGHT;
+    width *= scale;
+  }
+  return { width, height };
+}
+
+interface BubbleImage {
+  dataUri: string;
+  format: JsPdfImageFormat;
+  width: number;
+  height: number;
+}
+
+async function loadBubbleImage(
+  doc: jsPDF,
+  message: ExportMessage
+): Promise<BubbleImage | null> {
+  if (message.contentType !== 'image' || !message.mediaUrl) return null;
+
+  try {
+    const res = await fetch(message.mediaUrl);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    const format =
+      jsPdfImageFormat(message.mediaType) ?? jsPdfImageFormat(blob.type);
+    if (!format) return null;
+    const dataUri = await blobToDataUri(blob);
+    const props = doc.getImageProperties(dataUri);
+    const { width, height } = fitImageMm(props.width, props.height);
+    if (width <= 0 || height <= 0) return null;
+    return { dataUri, format, width, height };
+  } catch (err) {
+    console.warn(
+      'chat export: failed to embed image for message',
+      message.id,
+      err
+    );
+    return null;
+  }
+}
+
 interface PreparedBubble {
   message: ExportMessage;
   isOutbound: boolean;
   senderLabel: string;
+  image: BubbleImage | null;
+  archiveRef: string | null;
   lines: string[];
   bubbleWidth: number;
   bodyHeight: number;
   totalHeight: number;
 }
 
-function prepareBubble(doc: jsPDF, message: ExportMessage): PreparedBubble {
+async function prepareBubble(
+  doc: jsPDF,
+  message: ExportMessage,
+  index: number
+): Promise<PreparedBubble> {
   const isOutbound = message.senderType !== 'customer';
-  doc.setFontSize(FONT_SIZE_BODY);
-  const text = pdfSafeText(message.text || '(empty message)');
   const senderLabel = pdfSafeText(message.senderLabel);
-  const lines = doc.splitTextToSize(
-    text,
-    BUBBLE_MAX_WIDTH - BUBBLE_PAD_X * 2
-  ) as string[];
+  const image = await loadBubbleImage(doc, message);
+
+  const archiveFileName = archiveMediaFileName(message, index);
+  const archiveRef = archiveFileName
+    ? `Archived as: media/${archiveFileName}`
+    : null;
+
+  doc.setFontSize(FONT_SIZE_BODY);
+  const rawText = image
+    ? captionFromPlaceholder(message.text)
+    : message.text || '(empty message)';
+  const text = pdfSafeText(rawText);
+  const lines = text
+    ? (doc.splitTextToSize(
+        text,
+        BUBBLE_MAX_WIDTH - BUBBLE_PAD_X * 2
+      ) as string[])
+    : [];
 
   doc.setFontSize(FONT_SIZE_BODY);
   const widestLine = lines.reduce(
@@ -127,23 +237,36 @@ function prepareBubble(doc: jsPDF, message: ExportMessage): PreparedBubble {
     ? `${formatTimestamp(message.createdAt)}  \u00b7  ${STATUS_LABEL[message.status] ?? message.status}`
     : formatTimestamp(message.createdAt);
   const metaWidth = doc.getTextWidth(metaText);
+
+  doc.setFontSize(FONT_SIZE_REF);
+  const archiveRefWidth = archiveRef ? doc.getTextWidth(archiveRef) : 0;
   doc.setFontSize(FONT_SIZE_BODY);
 
   const bubbleWidth = Math.min(
     BUBBLE_MAX_WIDTH,
-    Math.max(widestLine, metaWidth) + BUBBLE_PAD_X * 2
+    Math.max(widestLine, metaWidth, archiveRefWidth, image?.width ?? 0) +
+      BUBBLE_PAD_X * 2
   );
 
   const bodyHeight = lines.length * LINE_HEIGHT;
   const senderLineHeight = META_LINE_HEIGHT + 1;
   const metaLineHeight = META_LINE_HEIGHT + 1;
+  const imageBlockHeight = image ? image.height + IMAGE_CAPTION_GAP : 0;
+  const archiveRefHeight = archiveRef ? REF_LINE_HEIGHT + REF_LINE_GAP : 0;
   const totalHeight =
-    BUBBLE_PAD_Y * 2 + senderLineHeight + bodyHeight + metaLineHeight;
+    BUBBLE_PAD_Y * 2 +
+    senderLineHeight +
+    imageBlockHeight +
+    bodyHeight +
+    archiveRefHeight +
+    metaLineHeight;
 
   return {
     message,
     isOutbound,
     senderLabel,
+    image,
+    archiveRef,
     lines,
     bubbleWidth,
     bodyHeight,
@@ -305,13 +428,22 @@ function drawBubble(
   startLine = 0,
   endLine?: number
 ) {
-  const { message, isOutbound } = bubble;
+  const { message, isOutbound, image, archiveRef } = bubble;
+  const showImage = startLine === 0 && image !== null;
+  const showArchiveRef = startLine === 0 && archiveRef !== null;
   const lines = bubble.lines.slice(startLine, endLine ?? bubble.lines.length);
   const bodyHeight = lines.length * LINE_HEIGHT;
   const senderLineHeight = META_LINE_HEIGHT + 1;
   const metaLineHeight = META_LINE_HEIGHT + 1;
+  const imageBlockHeight = showImage ? image!.height + IMAGE_CAPTION_GAP : 0;
+  const archiveRefHeight = showArchiveRef ? REF_LINE_HEIGHT + REF_LINE_GAP : 0;
   const height =
-    BUBBLE_PAD_Y * 2 + senderLineHeight + bodyHeight + metaLineHeight;
+    BUBBLE_PAD_Y * 2 +
+    senderLineHeight +
+    imageBlockHeight +
+    bodyHeight +
+    archiveRefHeight +
+    metaLineHeight;
   const x = isOutbound
     ? PAGE.width - MARGIN.side - bubble.bubbleWidth
     : MARGIN.side;
@@ -334,6 +466,19 @@ function drawBubble(
   doc.text(label, x + BUBBLE_PAD_X, cursorY);
 
   cursorY += LINE_HEIGHT;
+
+  if (showImage) {
+    doc.addImage(
+      image!.dataUri,
+      image!.format,
+      x + BUBBLE_PAD_X,
+      cursorY,
+      image!.width,
+      image!.height
+    );
+    cursorY += image!.height + IMAGE_CAPTION_GAP;
+  }
+
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(FONT_SIZE_BODY);
   doc.setTextColor(20, 20, 20);
@@ -341,6 +486,14 @@ function drawBubble(
     doc.text(line, x + BUBBLE_PAD_X, cursorY);
     cursorY += LINE_HEIGHT;
   });
+
+  if (showArchiveRef) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(FONT_SIZE_REF);
+    doc.setTextColor(130, 130, 130);
+    doc.text(archiveRef!, x + BUBBLE_PAD_X, cursorY);
+    cursorY += REF_LINE_HEIGHT + REF_LINE_GAP;
+  }
 
   const isLastChunk = (endLine ?? bubble.lines.length) >= bubble.lines.length;
   doc.setCharSpace(0);
@@ -386,12 +539,15 @@ function drawBubble(
   return height;
 }
 
-export async function buildAndDownloadPdf(data: ExportData) {
+export async function buildPdfBlob(data: ExportData): Promise<Blob> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const logoBase64 = await loadImageAsBase64('./logo-2.png').catch(() => null);
   const usableHeight = PAGE.height - MARGIN.top - MARGIN.bottom;
 
-  const bubbles = data.messages.map((m) => prepareBubble(doc, m));
+  const bubbles: PreparedBubble[] = [];
+  for (let i = 0; i < data.messages.length; i++) {
+    bubbles.push(await prepareBubble(doc, data.messages[i], i));
+  }
 
   type PlacedChunk = {
     bubble: PreparedBubble;
@@ -419,7 +575,17 @@ export async function buildAndDownloadPdf(data: ExportData) {
       let start = 0;
       if (y < MARGIN.top + usableHeight - 20) newPage();
       while (start < bubble.lines.length) {
-        const fixedHeight = BUBBLE_PAD_Y * 2 + (META_LINE_HEIGHT + 1) * 2;
+        const includeImage = start === 0 && bubble.image !== null;
+        const includeRef = start === 0 && bubble.archiveRef !== null;
+        const imageBlockHeight = includeImage
+          ? bubble.image!.height + IMAGE_CAPTION_GAP
+          : 0;
+        const refHeight = includeRef ? REF_LINE_HEIGHT + REF_LINE_GAP : 0;
+        const fixedHeight =
+          BUBBLE_PAD_Y * 2 +
+          (META_LINE_HEIGHT + 1) * 2 +
+          imageBlockHeight +
+          refHeight;
         const roomForLines = MARGIN.top + usableHeight - y - fixedHeight;
         const linesThatFit = Math.max(
           1,
@@ -450,5 +616,10 @@ export async function buildAndDownloadPdf(data: ExportData) {
     });
   });
 
-  doc.save(`${exportFileStem(data)}.pdf`);
+  return doc.output('blob');
+}
+
+export async function buildAndDownloadPdf(data: ExportData): Promise<void> {
+  const blob = await buildPdfBlob(data);
+  downloadBlob(blob, `${exportFileStem(data)}.pdf`);
 }

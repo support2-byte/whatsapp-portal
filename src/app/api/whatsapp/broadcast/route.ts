@@ -15,6 +15,12 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import {
+  claimTemplateSend,
+  releaseTemplateClaim,
+  cooldownMessage,
+  type TemplateClaim,
+} from '@/lib/whatsapp/template-cooldown'
 
 interface BroadcastResult {
   phone: string
@@ -177,6 +183,37 @@ export async function POST(request: Request) {
         continue
       }
 
+      let claim: TemplateClaim | null = null
+      try {
+        claim = await claimTemplateSend(supabase, {
+          accountId,
+          templateName: template_name,
+          templateLanguage: resolvedTemplate.language,
+          phone: recipient.phone,
+          userId,
+        })
+      } catch (claimError) {
+        results.push({
+          phone: recipient.phone,
+          status: 'failed',
+          error:
+            claimError instanceof Error
+              ? claimError.message
+              : 'Cooldown check failed',
+        })
+        failedCount++
+        continue
+      }
+      if (claim && !claim.claimed && claim.lastSentAt) {
+        results.push({
+          phone: recipient.phone,
+          status: 'failed',
+          error: cooldownMessage(claim.lastSentAt),
+        })
+        failedCount++
+        continue
+      }
+
       // Retry with phone variants on "not in allowed list" so numbers
       // that differ only in a trunk-prefix 0 still reach recipients.
       const variants = phoneVariants(sanitized)
@@ -208,6 +245,10 @@ export async function POST(request: Request) {
           lastError = errorMessage
           // retry with next variant
         }
+      }
+
+      if (!sentMessageId) {
+        await releaseTemplateClaim(supabase, claim)
       }
 
       if (sentMessageId) {

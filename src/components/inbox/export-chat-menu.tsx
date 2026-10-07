@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Download, FileText, FileDown, Loader2 } from 'lucide-react';
+import { Download, FileText, FileDown, Loader2, Archive } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 import { createClient } from '@/lib/supabase/client';
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { fetchConversationExportData } from '@/lib/export/conversation-export';
 import { downloadTextExport } from '@/lib/export/text-export';
+import { buildAndDownloadZipExport } from '@/lib/export/zip-export';
 import { buildAndDownloadPdf } from '@/lib/export/pdf-export';
 
 interface ExportChatMenuProps {
@@ -26,9 +27,11 @@ export function ExportChatMenu({ conversation, contact }: ExportChatMenuProps) {
   const t = useTranslations('Inbox.messageThread');
   const supabase = createClient();
   const { profile, account } = useAuth();
-  const [exporting, setExporting] = useState<'pdf' | 'text' | null>(null);
+  const [exporting, setExporting] = useState<'pdf' | 'text' | 'zip' | null>(
+    null
+  );
 
-  async function handleExport(format: 'pdf' | 'text') {
+  async function handleExport(format: 'pdf' | 'text' | 'zip') {
     if (exporting) return;
     setExporting(format);
     try {
@@ -45,7 +48,9 @@ export function ExportChatMenu({ conversation, contact }: ExportChatMenuProps) {
         return;
       }
       if (format === 'pdf') {
-        buildAndDownloadPdf(data);
+        await buildAndDownloadPdf(data);
+      } else if (format === 'zip') {
+        await buildAndDownloadZipExport(data);
       } else {
         await downloadTextExport(data);
       }
@@ -90,6 +95,13 @@ export function ExportChatMenu({ conversation, contact }: ExportChatMenuProps) {
         >
           <FileText className="h-3.5 w-3.5" />
           {t('exportAsText')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => handleExport('zip')}
+          className="text-popover-foreground text-sm"
+        >
+          <Archive className="h-3.5 w-3.5" />
+          {t('exportAsZip')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

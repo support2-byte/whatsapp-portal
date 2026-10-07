@@ -11,6 +11,13 @@ import {
   validateSendMessageParams,
   SendMessageError,
 } from '@/lib/whatsapp/send-message'
+import {
+  claimTemplateSend,
+  releaseTemplateClaim,
+  cooldownMessage,
+  cooldownRemainingSeconds,
+  type TemplateClaim,
+} from '@/lib/whatsapp/template-cooldown'
 
 // The dashboard's outbound-send endpoint. It owns auth, per-user rate
 // limiting, and the two ways the UI targets a thread — an existing
@@ -152,6 +159,48 @@ export async function POST(request: Request) {
     // phone-variant retry, persists, pauses active flow runs). Its
     // `SendMessageError` carries a machine code + HTTP status; the
     // dashboard maps it to the internal `{ error }` shape.
+    let claim: TemplateClaim | null = null
+    if (message_type === 'template') {
+      let targetContactId: string | null = contact_id ?? null
+      if (conversationIdInput) {
+        const { data: convRow } = await supabase
+          .from('conversations')
+          .select('contact_id')
+          .eq('id', conversationId)
+          .maybeSingle()
+        targetContactId = convRow?.contact_id ?? null
+      }
+      if (targetContactId) {
+        const { data: target } = await supabase
+          .from('contacts')
+          .select('id, phone')
+          .eq('id', targetContactId)
+          .eq('account_id', accountId)
+          .maybeSingle()
+        if (target?.phone) {
+          claim = await claimTemplateSend(supabase, {
+            accountId,
+            templateName: template_name,
+            templateLanguage: template_language,
+            phone: target.phone,
+            contactId: target.id,
+            userId,
+          })
+          if (claim && !claim.claimed && claim.lastSentAt) {
+            return NextResponse.json(
+              {
+                error: cooldownMessage(claim.lastSentAt),
+                code: 'TEMPLATE_COOLDOWN',
+                sent_at: claim.lastSentAt,
+                retry_after_seconds: cooldownRemainingSeconds(claim.lastSentAt),
+              },
+              { status: 409 }
+            )
+          }
+        }
+      }
+    }
+
     try {
       const result = await sendMessageToConversation(supabase, accountId, {
         conversationId,
@@ -173,6 +222,9 @@ export async function POST(request: Request) {
         whatsapp_message_id: result.whatsappMessageId,
       })
     } catch (err) {
+      if (!(err instanceof SendMessageError && err.code === 'db_error')) {
+        await releaseTemplateClaim(supabase, claim)
+      }
       if (err instanceof SendMessageError) {
         return NextResponse.json(
           { error: err.message },
